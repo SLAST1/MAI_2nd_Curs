@@ -1,1 +1,1 @@
-# SLAST1-MAI_2nd_Curs
+# MAI_2nd_Curs
