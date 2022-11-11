@@ -1,0 +1,65 @@
+; golden21
+; Пивницкий М8о-206Б-19
+; [ 1, 3];1.844
+; 5ln^4 (arctg^2(z-2))-z-7
+(define a 1)(define b 3)
+(define (fun x)
+ (set! x (- x (/ 19 20)))
+ (- (* 5 (expt (log (expt (atan (- x 2)) 2)) 4)) x 7)
+)
+(define (golden-section-search a bz)
+ (let(
+      (xmin(if(< a b)(golden-start a b)(golden-start b a )))
+     )
+     (newline)
+     xmin
+ )
+)
+(define (golden-start a b)
+ (set! total-iterations 0)
+ (let(
+      (xa (+ a (* mphi(- b a))))
+      (xb (+ b (-(* mphi(- b a)))))
+     )
+     (try a b xa (fun xa) xb (fun xb))
+ )
+)
+(define mphi (* (- 3(sqrt 5))(/ 2.0)))
+(define (try a b xa ya xb yb)
+ (if(close-enough? a b)
+      (* (+ a b)0.5)
+      (let() (display "+")
+             (set! total-iterations (+ total-iterations 1))
+             (cond((< ya yb)(set! b xb)
+                         (set! xb xa)
+                         (set! yb ya)
+                         (set! xa (+ a (* mphi(- b a))))
+                         (try a b xa (fun xa) xb yb)
+                  )
+                  (else    (set! a xa)
+                         (set! xa xb)
+                         (set! ya yb)
+                         (set! xb (- b (* mphi(- b a))))
+                         (try a b xa ya xb (fun xb))
+                   )
+             );cond...
+      );let...
+ );if...
+)
+(define (close-enough? x y)
+  (<(abs (- x y))tolerance))
+(define tolerance 0.001)
+(define total-iterations 0)
+(define xmin 0)
+(set! xmin(golden-section-search a b))
+  (display"Interval=\t[")
+  (display a)
+  (display" , ")
+  (display b)
+  (display"]\n")
+  (display"Total number of iterations=")
+total-iterations
+  (display"xmin=\t\t")
+xmin
+  (display"f(xmin)=\t")
+(fun xmin)
