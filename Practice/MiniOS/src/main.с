@@ -1,0 +1,312 @@
+#include <linux/module.h>
+#include <linux/types.h>
+#include <linux/init.h>
+#include <linux/bitops.h>
+#include <linux/vmalloc.h>
+#include <linux/pagemap.h>
+#include <linux/netdevice.h>
+#include <linux/ipv6.h>
+#include <linux/slab.h>
+#include <net/checksum.h>
+#include <net/ip6_checksum.h>
+#include <linux/net_tstamp.h>
+#include <linux/mii.h>
+#include <linux/ethtool.h>
+#include <linux/if.h>
+#include <linux/if_vlan.h>
+#include <linux/pci.h>
+#include <linux/pci-aspm.h>
+#include <linux/delay.h>
+#include <linux/interrupt.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/sctp.h>
+#include <linux/if_ether.h>
+#include <linux/aer.h>
+#include <linux/prefetch.h>
+#include <linux/pm_runtime.h>
+#ifdef CONFIG_IGB_DCA
+#include <linux/dca.h>
+#endif
+#include <linux/i2c.h>
+#include "igb.h"
+#include "port.h"
+#include "monitor.h"
+#include "multiboot.h"
+#include "descriptor_tables.h"
+#include "timer.h"
+
+/**
+ *  igb_request_irq - initialize interrupts
+ *  @adapter: board private structure to initialize
+ *
+ *  Attempts to configure interrupts using the best available
+ *  capabilities of the hardware and kernel.
+ **/
+static int igb_request_irq(struct igb_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	struct pci_dev *pdev = adapter->pdev;
+	int err = 0;
+
+	if (adapter->msix_entries) {
+		err = igb_request_msix(adapter);
+		if (!err)
+			goto request_done;
+		/* fall back to MSI */
+		igb_free_all_tx_resources(adapter);
+		igb_free_all_rx_resources(adapter);
+
+		igb_clear_interrupt_scheme(adapter);
+		err = igb_init_interrupt_scheme(adapter, false);
+		if (err)
+			goto request_done;
+
+		igb_setup_all_tx_resources(adapter);
+		igb_setup_all_rx_resources(adapter);
+		igb_configure(adapter);
+	}
+
+	igb_assign_vector(adapter->q_vector[0], 0);
+
+	if (adapter->flags & IGB_FLAG_HAS_MSI) {
+		err = request_irq(pdev->irq, igb_intr_msi, 0,
+				  netdev->name, adapter);
+		if (!err)
+			goto request_done;
+
+		/* fall back to legacy interrupts */
+		igb_reset_interrupt_capability(adapter);
+		adapter->flags &= ~IGB_FLAG_HAS_MSI;
+	}
+
+	err = request_irq(pdev->irq, igb_intr, IRQF_SHARED,
+			  netdev->name, adapter);
+
+	if (err)
+		dev_err(&pdev->dev, "Error %d getting interrupt\n",
+			err);
+
+request_done:
+	return err;
+}
+
+/**
+ *  igb_request_msix - Initialize MSI-X interrupts
+ *  @adapter: board private structure to initialize
+ *
+ *  igb_request_msix allocates MSI-X vectors and requests interrupts from the
+ *  kernel.
+ **/
+static int igb_request_msix(struct igb_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	struct e1000_hw *hw = &adapter->hw;
+	int i, err = 0, vector = 0, free_vector = 0;
+
+	err = request_irq(adapter->msix_entries[vector].vector,
+			  igb_msix_other, 0, netdev->name, adapter);
+	if (err)
+		goto err_out;
+
+	for (i = 0; i < adapter->num_q_vectors; i++) {
+		struct igb_q_vector *q_vector = adapter->q_vector[i];
+
+		vector++;
+
+		q_vector->itr_register = hw->hw_addr + E1000_EITR(vector);
+
+		if (q_vector->rx.ring && q_vector->tx.ring)
+			sprintf(q_vector->name, "%s-TxRx-%u", netdev->name,
+				q_vector->rx.ring->queue_index);
+		else if (q_vector->tx.ring)
+			sprintf(q_vector->name, "%s-tx-%u", netdev->name,
+				q_vector->tx.ring->queue_index);
+		else if (q_vector->rx.ring)
+			sprintf(q_vector->name, "%s-rx-%u", netdev->name,
+				q_vector->rx.ring->queue_index);
+		else
+			sprintf(q_vector->name, "%s-unused", netdev->name);
+
+		err = request_irq(adapter->msix_entries[vector].vector,
+				  igb_msix_ring, 0, q_vector->name,
+				  q_vector);
+		if (err)
+			goto err_free;
+	}
+
+	igb_configure_msix(adapter);
+	return 0;
+
+err_free:
+	/* free already assigned IRQs */
+	free_irq(adapter->msix_entries[free_vector++].vector, adapter);
+
+	vector--;
+	for (i = 0; i < vector; i++) {
+		free_irq(adapter->msix_entries[free_vector++].vector,
+			 adapter->q_vector[i]);
+	}
+err_out:
+	return err;
+}
+
+/**
+ *  igb_irq_disable - Mask off interrupt generation on the NIC
+ *  @adapter: board private structure
+ **/
+static void igb_irq_disable(struct igb_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+
+	/* we need to be careful when disabling interrupts.  The VFs are also
+	 * mapped into these registers and so clearing the bits can cause
+	 * issues on the VF drivers so we only need to clear what we set
+	 */
+	if (adapter->msix_entries) {
+		u32 regval = rd32(E1000_EIAM);
+		wr32(E1000_EIAM, regval & ~adapter->eims_enable_mask);
+		wr32(E1000_EIMC, adapter->eims_enable_mask);
+		regval = rd32(E1000_EIAC);
+		wr32(E1000_EIAC, regval & ~adapter->eims_enable_mask);
+	}
+
+	wr32(E1000_IAM, 0);
+	wr32(E1000_IMC, ~0);
+	wrfl();
+	if (adapter->msix_entries) {
+		int i;
+		for (i = 0; i < adapter->num_q_vectors; i++)
+			synchronize_irq(adapter->msix_entries[i].vector);
+	} else {
+		synchronize_irq(adapter->pdev->irq);
+	}
+}
+
+/**
+ *  igb_intr_msi - Interrupt Handler
+ *  @irq: interrupt number
+ *  @data: pointer to a network interface device structure
+ **/
+static irqreturn_t igb_intr_msi(int irq, void *data)
+{
+	struct igb_adapter *adapter = data;
+	struct igb_q_vector *q_vector = adapter->q_vector[0];
+	struct e1000_hw *hw = &adapter->hw;
+	/* read ICR disables interrupts using IAM */
+	u32 icr = rd32(E1000_ICR);
+
+	igb_write_itr(q_vector);
+
+	if (icr & E1000_ICR_DRSTA)
+		schedule_work(&adapter->reset_task);
+
+	if (icr & E1000_ICR_DOUTSYNC) {
+		/* HW is reporting DMA is out of sync */
+		adapter->stats.doosync++;
+	}
+
+	if (icr & (E1000_ICR_RXSEQ | E1000_ICR_LSC)) {
+		hw->mac.get_link_status = 1;
+		if (!test_bit(__IGB_DOWN, &adapter->state))
+			mod_timer(&adapter->watchdog_timer, jiffies + 1);
+	}
+
+	if (icr & E1000_ICR_TS) {
+		u32 tsicr = rd32(E1000_TSICR);
+
+		if (tsicr & E1000_TSICR_TXTS) {
+			/* acknowledge the interrupt */
+			wr32(E1000_TSICR, E1000_TSICR_TXTS);
+			/* retrieve hardware timestamp */
+			schedule_work(&adapter->ptp_tx_work);
+		}
+	}
+
+	napi_schedule(&q_vector->napi);
+
+	return IRQ_HANDLED;
+}
+
+void init_process_one(){
+   register_interrupt_handler(0x0, &process_one); //регистрируем первый процесс с номером прерывания 0
+}
+static void process_two(registers_t reg){
+
+   int flags = 1;
+   int fd;
+   char buf[256];
+   char* str = "New text for test2.txt";
+
+monitor_write("Opening test2.txt\n");
+   if((fd = open("test2.txt", flags))>0){
+monitor_write("File test2.txt opened!\n");
+}
+monitor_write("Reading the second file...\n");
+read(fd, buf, 256,0);
+monitor_write("\t");
+monitor_write(buf);
+monitor_write("\n");
+monitor_write("Writing to second file...\n");
+write(fd,str,256,0);
+monitor_write("Reading the second file...\n");
+read(fd, buf, 256,0);
+monitor_write("\t");
+monitor_write(buf);
+monitor_write("\n");
+monitor_write("Closing the second file...\n");
+close(fd);
+}
+
+void init_process_two(){
+   register_interrupt_handler(0x1, &process_two);//регистрируем второй процесс с номером прерывания
+}
+/**
+ *  igb_intr_close - Disables a network interface
+ *  @netdev: network interface device structure
+ *
+ *  Returns 0, this is not allowed to fail
+ *
+ *  The close entry point is called when an interface is de-activated
+ *  by the OS.  The hardware is still under the driver's control, but
+ *  needs to be disabled.  A global MAC reset is issued to stop the
+ *  hardware, and all transmit and receive resources are freed.
+ **/
+static int __igb_intr_close(struct net_device *netdev, bool suspending)
+{
+	struct igb_adapter *adapter = netdev_priv(netdev);
+	struct pci_dev *pdev = adapter->pdev;
+
+	WARN_ON(test_bit(__IGB_RESETTING, &adapter->state));
+
+	if (!suspending)
+		pm_runtime_get_sync(&pdev->dev);
+
+	igb_down(adapter);
+	igb_free_irq(adapter);
+
+	igb_free_all_tx_resources(adapter);
+	igb_free_all_rx_resources(adapter);
+
+	if (!suspending)
+		pm_runtime_put_sync(&pdev->dev);
+	return 0;
+}
+
+static int igb_intr_close(struct net_device *netdev)
+{
+	return __igb_intr_close(netdev, false);
+}
+
+int main (struct multiboot *mboot_ptr){
+    int igb_request_irq(); //инициализируем прерывание
+    int igb_request_msix(); // поступает сигнал, вызывающий прерывание
+    void igb_irq_disable(); //отключение генерации прерывания
+    irqreturn_t igb_intr_msi(); //обработка прерывания
+    void init_process_one();////регистрируем прерывания в IDT
+    void init_process_two();//
+    struct sci_port_end_point_properties();//передача данных в порт
+    struct sci_port_properties ());//получение данных из порта в неизменном виде
+    monitor_write("\nDone!");
+    return 0;
+}
