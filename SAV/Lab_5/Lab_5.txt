@@ -1,0 +1,35 @@
+f := 12*x^7 - 168*x^5 + 288*x^3 + 324*x
+g :=4*x^6 - 28*x^4 + 20*x^3 + 48*x^2 - 60*x
+
+mygcd[poly1_ , poly2_ ] := 
+Module[ 
+{p1 = poly1 , p2 = poly2 , xval = 1, xxval = 0, yval = 0, yyval = 1, q, r},
+While[ 
+Length[CoefficientList [p2, x]] != 0, 
+q = PolynomialQuotient [p1, p2, x]; 
+r = PolynomialRemainder [p1, p2, x]; 
+{p1, p2} = {p2, r}; 
+{xval, xxval} = {xxval , (xval - xxval * q) // ExpandAll }; 
+{yval, yyval} = {yyval , (yval - yyval * q) // ExpandAll }; 
+]; 
+{xval, yval, p1} 
+];
+
+{u, v, gcd} = mygcd[f, g]; 
+"u =" u 
+"v =" v 
+"gcd =" gcd
+
+k1 = CoefficientList [gcd, x] // Last 
+gcdNorm = (gcd / k1) // ExpandAll 
+uNorm = (u / k1) // ExpandAll 
+vNorm = (v / k1) // ExpandAll
+
+wolframgcd = PolynomialGCD [f, g]
+
+k2 = CoefficientList [wolframgcd , x] // Last
+wolframgcdNorm = (wolframgcd / k2) // ExpandAll
+
+SameQ[wolframgcdNorm , gcdNorm ]
+
+wolframgcdNorm == (uNorm * f + vNorm * g) // ExpandAll

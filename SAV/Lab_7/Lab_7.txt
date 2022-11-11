@@ -1,0 +1,101 @@
+f = 11 * x ^ 2 - 2 * x * y - 2 * x * z + 2 * y * z + 9 * z ^ 2 - 4 * x + y + z;
+
+TraditionalForm [f]
+
+A = { 
+{11, - 1, - 1}, 
+{- 1, 0, 1}, 
+{- 1, 1, 9} 
+};
+
+MatrixForm [A]
+
+l=. 
+AE = A - IdentityMatrix [3] * l;
+MatrixForm [AE]
+
+myCharPoly = Det[AE]
+
+wolframCharPoly = CharacteristicPolynomial [A, l]
+
+FullSimplify [myCharPoly == wolframCharPoly ]
+
+sol = Solve[myCharPoly == 0, l];
+
+myEigenVals = l /. sol;
+
+% // N
+
+wolframEigenVals = Eigenvalues [A]; 
+Sort[wolframEigenVals ] == Sort[myEigenVals ]
+
+X = {x, y, z}; 
+one = AE /. l -> myEigenVals [[1]]; 
+two = AE /. l -> myEigenVals [[2]]; 
+three = AE /. l -> myEigenVals [[3]]; 
+myOne = one.X 
+myTwo = two.X 
+myThree = three .X
+
+myEigenVec1 = Solve[myOne == 0 /. z -> 1]; 
+myEigenVec2 = Solve[myTwo == 0 /. z -> 1]; 
+myEigenVec3 = Solve[myThree == 0 /. z -> 1]; 
+myEigenVec1 = {x, y, 1} /. myEigenVec1 [[1]] 
+myEigenVec2 = {x, y, 1} /. myEigenVec2 [[1]] 
+myEigenVec3 = {x, y, 1} /. myEigenVec3 [[1]]
+
+wolframEigenSys = Eigensystem [A]
+
+myEigenVals [[1]] 
+myEigenVals [[2]] 
+myEigenVals [[3]]
+
+wolframEigenSys [[2, 3]] == N[myEigenVec1 ] 
+wolframEigenSys [[2, 2]] == N[myEigenVec2 ] 
+wolframEigenSys [[2, 1]] == N[myEigenVec3 ]
+
+S= { 
+Normalize [myEigenVec1 ], 
+Normalize [myEigenVec2 ], 
+Normalize [myEigenVec3 ] 
+};
+N[S] // MatrixForm
+
+(*fk1*) 
+a = {- 2, 0.5, 0.5}; 
+a1 = S.a; 
+N[a1] // MatrixForm 
+fk1 = myEigenVals [[1]] * x1 ^ 2 + myEigenVals [[2]] * y1 ^ 2 + 
+myEigenVals [[3]] * z1 ^ 2 + 2 * a1[[1]] * x1 + 2 * a1[[2]] * y1 + 2 * a1[[3]] * z1; 
+fk1 = FullSimplify [fk1]; 
+fk1 /. {x1 -> x, y1 -> y, z1 -> z} // TraditionalForm
+
+(* Дополняем члены до полного квадрата - fk2 *) 
+a0 = - myEigenVals [[1]] * (a1[[1]] / myEigenVals [[1]])^ 2 - myEigenVals [[2]] * 
+(a1[[2]] / myEigenVals [[2]])^ 2 - myEigenVals [[3]] * (a[[3]] / myEigenVals [[3]])^ 2; 
+fk2 = myEigenVals [[1]] * (x1 + a1[[1]] / myEigenVals [[1]])^ 2 + 
+myEigenVals [[2]] * (y1 + a1[[2]] / myEigenVals [[2]])^ 2 + 
+myEigenVals [[3]] * (z1 + a1[[3]] / myEigenVals [[3]])^ 2 + a0 
+TraditionalForm [ 
+fk2]
+
+(* fk3 *) 
+fk3 = myEigenVals [[1]] * x ^ 2 + myEigenVals [[2]] * y ^ 2 + myEigenVals [[3]] * z ^ 2 + a0; 
+TraditionalForm [
+fk3 == 0]
+
+(* fk4 *) 
+fk4 = myEigenVals [[1]] / a0 * x ^ 2 + 
+myEigenVals [[2]] / a0 * y ^ 2 + myEigenVals [[3]] / a0 * z ^ 2 + 1; 
+TraditionalForm [
+fk4 == 0]
+
+x =.; y =.; z =.; 
+value = 100; 
+fk[a_, b_, c_] := fk4 /. {x2 ->a, y2 -> b, z2 -> c} 
+ContourPlot3D [fk[x, y, z] == 0, 
+{x, - value , value}, {y, - value , value}, {z, - value , value}]
+
+fnk[a_, b_, c_] := f 
+ContourPlot3D [fnk[x, y, z] == 0, 
+{x, - value , value}, {y, - value , value}, {z, - value , value}]

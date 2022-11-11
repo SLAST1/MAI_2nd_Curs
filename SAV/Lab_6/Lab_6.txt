@@ -1,0 +1,22 @@
+predator [x_, a_, b_, c_, d_] := Module[ 
+{sol, eq1, eq2, t},
+
+eq1[t_] := x '[t] == x[t] * (a - b * y[t]);
+eq2[t_] := y '[t] == y[t] * (- c + d * x[t]); 
+
+sol = NDSolve [ 
+{eq1[t], eq2[t], x[0] == 2, y[0] == 1}, 
+{x, y}, 
+{t, 0, 7}, 
+MaxSteps \[RightArrow] 3000 
+]; 
+dots = Table[{x[t], y[t]} /. sol[[1]], {t, 0, 7, 0.01}] 
+]
+
+Manipulate [ 
+ListPlot [ predator [x, a, b, c, d], Joined \[RightArrow] True, PlotRange \[RightArrow] All, ImageSize \[RightArrow] 500], 
+{a, 1, 10, 1}, 
+{b, 1, 10, 1}, 
+{c, 1, 10, 1}, 
+{d, 1, 10, 1} 
+]
